@@ -103,7 +103,7 @@ impl App {
         let frame_view = frame.texture.create_view(&Default::default());
         let mut encoder = self.gfx.device.create_command_encoder(&Default::default());
 
-        self.scope.draw(&frame_view, &mut encoder);
+        self.scope.draw(&frame_view, &mut encoder, &self.gfx.queue);
 
         self.gfx.queue.submit([encoder.finish()]);
         frame.present();

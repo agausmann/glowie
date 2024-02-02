@@ -14,11 +14,16 @@ fn vs_main(
 }
 
 struct Config {
-    a: f32,
+    window_size: vec2<f32>,
+    sample_count: u32,
+    line_radius: f32,
 };
 
 @group(0) @binding(0)
 var<uniform> config: Config;
+
+@group(0) @binding(1)
+var<storage> samples: array<vec2<f32>>;
 
 @group(1) @binding(0)
 var tex_in: texture_storage_2d<r32float, read>;

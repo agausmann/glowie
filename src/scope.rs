@@ -1,4 +1,4 @@
-use encase::{ShaderSize, ShaderType, UniformBuffer};
+use bytemuck::{Pod, Zeroable};
 use wgpu::RenderPipelineDescriptor;
 
 use crate::GraphicsContext;
@@ -7,9 +7,30 @@ const STORAGE_DIMENSION: wgpu::TextureDimension = wgpu::TextureDimension::D2;
 const STORAGE_VIEW_DIMENSION: wgpu::TextureViewDimension = wgpu::TextureViewDimension::D2;
 const STORAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 
-#[derive(ShaderType)]
+const MAX_SAMPLES: usize = 4096;
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
 struct Config {
-    a: f32,
+    window_size: [f32; 2],
+    sample_count: u32,
+    line_radius: f32,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            window_size: [720.0, 720.0],
+            sample_count: 0,
+            line_radius: 5.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C)]
+struct Sample {
+    xy: [f32; 2],
 }
 
 struct SizeDependent {
@@ -90,51 +111,74 @@ impl SizeDependent {
 
 pub struct Scope {
     gfx: GraphicsContext,
-    config_buffer: UniformBuffer<Vec<u8>>,
-    wgpu_config_buffer: wgpu::Buffer,
-    config_bind_group: wgpu::BindGroup,
+    config: Config,
+    config_buffer: wgpu::Buffer,
+    sample_buffer: wgpu::Buffer,
+    uniform_bind_group: wgpu::BindGroup,
     texture_bind_group_layout: wgpu::BindGroupLayout,
-    size_dependent: Option<SizeDependent>,
+    size_dependent: SizeDependent,
     pipeline: wgpu::RenderPipeline,
 }
 
 impl Scope {
     pub fn new(gfx: GraphicsContext) -> Self {
-        let config_buffer = UniformBuffer::new(Vec::new());
-        let wgpu_config_buffer = gfx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Scope.uniform_buffer"),
-            size: Config::SHADER_SIZE.into(),
+        let config = Config::default();
+        let config_buffer = gfx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Scope.config_buffer"),
+            size: std::mem::size_of::<Config>().try_into().unwrap(),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
             mapped_at_creation: false,
         });
+        let sample_buffer = gfx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Scope.sample_buffer"),
+            size: (MAX_SAMPLES * std::mem::size_of::<Sample>())
+                .try_into()
+                .unwrap(),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
 
-        let config_bind_group_layout =
+        let uniform_bind_group_layout =
             gfx.device
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("Scope.config_bind_group_layout"),
-                    entries: &[wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
+                    label: Some("Scope.uniform_bind_group_layout"),
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
                         },
-                        count: None,
-                    }],
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                    ],
                 });
 
-        let config_bind_group = gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let uniform_bind_group = gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Scope.config_bind_group"),
-            layout: &config_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &wgpu_config_buffer,
-                    offset: 0,
-                    size: None,
-                }),
-            }],
+            layout: &uniform_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: config_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: sample_buffer.as_entire_binding(),
+                },
+            ],
         });
 
         let texture_bind_group_layout =
@@ -165,6 +209,8 @@ impl Scope {
                     ],
                 });
 
+        let size_dependent = SizeDependent::new(&gfx, &texture_bind_group_layout);
+
         let shader_module = gfx
             .device
             .create_shader_module(wgpu::include_wgsl!("scope.wgsl"));
@@ -173,7 +219,7 @@ impl Scope {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Scope.pipeline_layout"),
-                bind_group_layouts: &[&config_bind_group_layout, &texture_bind_group_layout],
+                bind_group_layouts: &[&uniform_bind_group_layout, &texture_bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -204,19 +250,23 @@ impl Scope {
 
         Self {
             gfx: gfx.clone(),
+            config,
             config_buffer,
-            wgpu_config_buffer,
-            config_bind_group,
+            sample_buffer,
+            uniform_bind_group,
             texture_bind_group_layout,
-            size_dependent: None,
+            size_dependent,
             pipeline,
         }
     }
 
-    pub fn draw(&mut self, frame_view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder) {
-        let size_dependent = self
-            .size_dependent
-            .get_or_insert_with(|| SizeDependent::new(&self.gfx, &self.texture_bind_group_layout));
+    pub fn draw(
+        &mut self,
+        frame_view: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+    ) {
+        queue.write_buffer(&self.config_buffer, 0, bytemuck::bytes_of(&self.config));
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -230,15 +280,21 @@ impl Scope {
             });
 
             render_pass.set_pipeline(&self.pipeline);
-            render_pass.set_bind_group(0, &self.config_bind_group, &[]);
-            render_pass.set_bind_group(1, &size_dependent.front, &[]);
+            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.size_dependent.front, &[]);
             render_pass.draw(0..3, 0..1);
         }
 
-        std::mem::swap(&mut size_dependent.front, &mut size_dependent.back);
+        std::mem::swap(
+            &mut self.size_dependent.front,
+            &mut self.size_dependent.back,
+        );
     }
 
     pub fn window_resized(&mut self) {
-        self.size_dependent = None;
+        self.size_dependent = SizeDependent::new(&self.gfx, &self.texture_bind_group_layout);
+
+        let size = self.gfx.window.inner_size();
+        self.config.window_size = [size.width as f32, size.height as f32];
     }
 }
