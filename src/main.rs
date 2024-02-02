@@ -16,6 +16,8 @@ pub struct GraphicsContextInner {
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    pub surface_caps: wgpu::SurfaceCapabilities,
+    pub surface_format: wgpu::TextureFormat,
     pub window: Arc<Window>,
 }
 
@@ -41,18 +43,27 @@ impl GraphicsContextInner {
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: None,
-                    required_features: wgpu::Features::empty(),
+                    required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
                     required_limits: wgpu::Limits::default(),
                 },
                 None,
             )
             .await?;
+        let surface_caps = surface.get_capabilities(&adapter);
+        let surface_format = surface_caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(surface_caps.formats[0]);
 
         Ok(Self {
             surface,
             adapter,
             device,
             queue,
+            surface_caps,
+            surface_format,
             window,
         })
     }
@@ -106,22 +117,15 @@ impl App {
     }
 
     fn reconfigure(&self) {
-        let surface_caps = self.gfx.surface.get_capabilities(&self.gfx.adapter);
-        let surface_format = surface_caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .unwrap_or(surface_caps.formats[0]);
         let size = self.gfx.window.inner_size();
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
+            format: self.gfx.surface_format,
             width: size.width,
             height: size.height,
-            present_mode: surface_caps.present_modes[0],
+            present_mode: self.gfx.surface_caps.present_modes[0],
             desired_maximum_frame_latency: 2,
-            alpha_mode: surface_caps.alpha_modes[0],
+            alpha_mode: self.gfx.surface_caps.alpha_modes[0],
             view_formats: vec![],
         };
         self.gfx.surface.configure(&self.gfx.device, &config);

@@ -8,7 +8,9 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.79"
 cpal = "0.15.2"
+encase = { version = "0.7.0", features = ["glam"] }
 env_logger = "0.11.1"
+glam = "0.25.0"
 pollster = "0.3.0"
 wgpu = "0.19.1"
 winit = "0.29.10"
