@@ -1,4 +1,5 @@
 use bytemuck::{Pod, Zeroable};
+use rand::Rng;
 use wgpu::RenderPipelineDescriptor;
 
 use crate::GraphicsContext;
@@ -273,7 +274,16 @@ impl Scope {
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
     ) {
+        self.config.sample_count = 1;
         queue.write_buffer(&self.config_buffer, 0, bytemuck::bytes_of(&self.config));
+        queue.write_buffer(
+            &self.sample_buffer,
+            0,
+            bytemuck::bytes_of(&[[
+                rand::thread_rng().gen_range(-1.0..=1.0f32),
+                rand::thread_rng().gen_range(-1.0..=1.0f32),
+            ]]),
+        );
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
