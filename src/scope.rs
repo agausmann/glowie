@@ -233,7 +233,10 @@ impl Scope {
                     entry_point: "vs_main",
                     buffers: &[],
                 },
-                primitive: wgpu::PrimitiveState::default(),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
@@ -282,7 +285,7 @@ impl Scope {
             render_pass.set_pipeline(&self.pipeline);
             render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             render_pass.set_bind_group(1, &self.size_dependent.front, &[]);
-            render_pass.draw(0..3, 0..1);
+            render_pass.draw(0..4, 0..1);
         }
 
         std::mem::swap(
