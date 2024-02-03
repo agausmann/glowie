@@ -118,11 +118,13 @@ pub struct Scope {
     gfx: GraphicsContext,
     config: Config,
     config_buffer: wgpu::Buffer,
+    samples: Vec<[f32; 2]>,
     sample_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     texture_bind_group_layout: wgpu::BindGroupLayout,
     size_dependent: SizeDependent,
     pipeline: wgpu::RenderPipeline,
+    t: f32,
 }
 
 impl Scope {
@@ -134,6 +136,8 @@ impl Scope {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
             mapped_at_creation: false,
         });
+
+        let samples = vec![[0.0; 2]; 2];
         let sample_buffer = gfx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Scope.sample_buffer"),
             size: (MAX_SAMPLES * std::mem::size_of::<Sample>())
@@ -260,11 +264,13 @@ impl Scope {
             gfx: gfx.clone(),
             config,
             config_buffer,
+            samples,
             sample_buffer,
             uniform_bind_group,
             texture_bind_group_layout,
             size_dependent,
             pipeline,
+            t: 0.0,
         }
     }
 
@@ -274,15 +280,19 @@ impl Scope {
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
     ) {
-        self.config.sample_count = 1;
+        self.config.sample_count = self.samples.len().try_into().unwrap();
         queue.write_buffer(&self.config_buffer, 0, bytemuck::bytes_of(&self.config));
+
+        *self.samples.first_mut().unwrap() = *self.samples.last().unwrap();
+        self.samples[1..].fill_with(|| {
+            self.t += 0.005;
+            [self.t % 2.0 - 1.0, (3.0 * self.t).sin()]
+        });
+
         queue.write_buffer(
             &self.sample_buffer,
             0,
-            bytemuck::bytes_of(&[[
-                rand::thread_rng().gen_range(-1.0..=1.0f32),
-                rand::thread_rng().gen_range(-1.0..=1.0f32),
-            ]]),
+            bytemuck::cast_slice(self.samples.as_slice()),
         );
 
         {

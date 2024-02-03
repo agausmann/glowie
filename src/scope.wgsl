@@ -44,6 +44,11 @@ var tex_out: texture_storage_2d<r32float, write>;
 const e = 2.7182818459045;
 const pi = 3.141592653589793;
 
+fn excitation(distance: f32) -> f32 {
+    let sigma = 0.01;
+    return 0.1 * pow(e, -0.5 * pow(distance / sigma, 2.0));
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // XXX: this is not the same as the value from the vertex shader;
@@ -61,11 +66,34 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let prev = textureLoad(tex_in, frag_coord);
     var next = prev * config.decay;
 
-    for (var i: u32 = 0; i < config.sample_count; i++) {
-        let dot = samples[i];
-        let dist = length(dot - pos);
-        let sigma = 0.01;
-        next.x += 0.1 * pow(e, -0.5 * pow(dist / sigma, 2.0));
+    var last_length = 0.0;
+
+    for (var i: u32 = 1; i < config.sample_count; i++) {
+        let start = samples[i - 1];
+        let end = samples[i];
+
+        let u = pos - start;
+        let v = end - start;
+
+        // Contribution from line
+        let proj_position = dot(u, v) / dot(v, v);
+
+        let proj = v * proj_position;
+
+        var disp = u - proj;
+        if (proj_position < 0.0) {
+            // Clamp to start point
+            disp = pos - start;
+        } else if (proj_position > 1.0) {
+            // Clamp to end point
+            disp = pos - end;
+        }
+        next.x += excitation(length(disp)) / (20.0 * length(v));
+
+        // Subtract contribution from start point - otherwise it will be
+        // counted twice (previous and current line segment)
+        next.x -= excitation(length(start - pos)) / (20.0 * max(length(v), last_length));
+        last_length = length(v);
     }
 
     textureStore(tex_out, frag_coord, next);
