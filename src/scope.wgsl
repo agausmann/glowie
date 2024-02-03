@@ -26,6 +26,7 @@ struct Config {
     window_size: vec2<f32>,
     sample_count: u32,
     line_radius: f32,
+    decay: f32,
 };
 
 @group(0) @binding(0)
@@ -42,53 +43,17 @@ var tex_out: texture_storage_2d<r32float, write>;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let aspect = config.window_size.x / config.window_size.y;
-    var screen_pos = in.pos;
-    if (aspect > 1.0) {
-        screen_pos.x *= aspect;
-    } else {
-        screen_pos.y /= aspect;
+    // XXX: this is not the same as the value from the vertex shader;
+    // it is actually pixel coordinates.
+    let frag_coord = vec2<u32>(in.clip_position.xy);
+
+    let prev = textureLoad(tex_in, frag_coord);
+    var next = prev * config.decay;
+    if (next.x < 0.01) {
+        next.x = 0.1;
     }
 
-    let h = atan2(screen_pos.y, screen_pos.x) + 3.14159;
-    let s = pow(length(screen_pos), 0.5);
-    if (s > 1.0) {
-        discard;
-    }
+    textureStore(tex_out, frag_coord, next);
 
-    let hp = degrees(h) / 60.0;
-    let x = s * (1 - abs((hp % 2) - 1));
-    var color = vec4<f32>(0, 0, 0, 0);
-
-    switch (i32(hp)) {
-        case 0: {
-            color.r = s;
-            color.g = x;
-        }
-        case 1: {
-            color.r = x;
-            color.g = s;
-        }
-        case 2: {
-            color.g = s;
-            color.b = x;
-        }
-        case 3: {
-            color.g = x;
-            color.b = s;
-        }
-        case 4: {
-            color.b = s;
-            color.r = x;
-        }
-        case 5: {
-            color.b = x;
-            color.r = s;
-        }
-        default: {}
-    }
-
-    let m = 1.0 - s;
-    color += vec4<f32>(m, m, m, 0);
-    return color;
+    return vec4<f32>(0.0, next.x, 0.0, 1.0);
 }

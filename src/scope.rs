@@ -15,6 +15,8 @@ struct Config {
     window_size: [f32; 2],
     sample_count: u32,
     line_radius: f32,
+    decay: f32,
+    _pad: [u8; 4],
 }
 
 impl Default for Config {
@@ -23,6 +25,8 @@ impl Default for Config {
             window_size: [720.0, 720.0],
             sample_count: 0,
             line_radius: 5.0,
+            decay: 0.999,
+            _pad: [0; 4],
         }
     }
 }
