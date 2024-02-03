@@ -27,6 +27,8 @@ struct Config {
     sample_count: u32,
     line_radius: f32,
     decay: f32,
+    sigma: f32,
+    intensity: f32,
 };
 
 @group(0) @binding(0)
@@ -43,10 +45,11 @@ var tex_out: texture_storage_2d<r32float, write>;
 
 const e = 2.7182818459045;
 const pi = 3.141592653589793;
+const inv_sqrt_2pi = 0.3989422804014327;
 
 fn excitation(distance: f32) -> f32 {
-    let sigma = 0.01;
-    return 0.1 * pow(e, -0.5 * pow(distance / sigma, 2.0));
+    return config.intensity * inv_sqrt_2pi / config.sigma
+        * pow(e, -0.5 * pow(distance / config.sigma, 2.0));
 }
 
 @fragment
@@ -63,12 +66,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         pos.y /= aspect;
     }
 
-    let prev = textureLoad(tex_in, frag_coord);
-    var next = prev * config.decay;
-
-    var last_length = 0.0;
+    let prev = textureLoad(tex_in, frag_coord).x;
+    var next = prev;
 
     for (var i: u32 = 1; i < config.sample_count; i++) {
+        
+        next *= config.decay;
+
         let start = samples[i - 1];
         let end = samples[i];
 
@@ -88,14 +92,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // Clamp to end point
             disp = pos - end;
         }
-        next.x += excitation(length(disp)) / (20.0 * length(v));
-
-        // Subtract contribution from start point - otherwise it will be
-        // counted twice (previous and current line segment)
-        next.x -= excitation(length(start - pos)) / (20.0 * max(length(v), last_length));
-        last_length = length(v);
+        next += excitation(length(disp)) / length(v);
     }
 
-    textureStore(tex_out, frag_coord, next);
-    return vec4<f32>(0.0, next.x, 0.0, 1.0);
+    next = min(next, 2.0);
+
+    textureStore(tex_out, frag_coord, vec4(next));
+    return vec4<f32>(0.0, next, 0.0, 1.0);
 }

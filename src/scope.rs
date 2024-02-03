@@ -17,6 +17,8 @@ struct Config {
     sample_count: u32,
     line_radius: f32,
     decay: f32,
+    sigma: f32,
+    intensity: f32,
     _pad: [u8; 4],
 }
 
@@ -26,7 +28,9 @@ impl Default for Config {
             window_size: [720.0, 720.0],
             sample_count: 0,
             line_radius: 5.0,
-            decay: 0.999,
+            decay: 1.0 - 1e-4,
+            sigma: 2e-3,
+            intensity: 5e-7,
             _pad: [0; 4],
         }
     }
@@ -137,7 +141,7 @@ impl Scope {
             mapped_at_creation: false,
         });
 
-        let samples = vec![[0.0; 2]; 2];
+        let samples = vec![[0.0; 2]; 1024];
         let sample_buffer = gfx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Scope.sample_buffer"),
             size: (MAX_SAMPLES * std::mem::size_of::<Sample>())
@@ -286,7 +290,7 @@ impl Scope {
         *self.samples.first_mut().unwrap() = *self.samples.last().unwrap();
         self.samples[1..].fill_with(|| {
             self.t += 0.005;
-            [self.t % 2.0 - 1.0, (3.0 * self.t).sin()]
+            [0.5 * (3.0 * self.t).cos(), 0.5 * (3.01 * self.t).sin()]
         });
 
         queue.write_buffer(
