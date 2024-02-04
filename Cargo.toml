@@ -7,8 +7,12 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.79"
+audrey = "0.3.0"
 bytemuck = { version = "1.14.1", features = ["derive"] }
-cpal = "0.15.2"
+clap = { version = "4.4.18", features = ["derive"] }
+# https://github.com/RustAudio/cpal/pull/828
+# cpal = "0.15.2"
+cpal = { git = "https://github.com/agausmann/cpal.git", branch = "try_with_sample_rate" }
 env_logger = "0.11.1"
 glam = "0.25.0"
 pollster = "0.3.0"

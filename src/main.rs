@@ -1,13 +1,33 @@
 mod scope;
 
-use anyhow::Context;
+use anyhow::{ensure, Context};
+use clap::Parser;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{ChannelCount, SampleRate, SupportedBufferSize};
 use pollster::block_on;
 use scope::Scope;
+use std::path::PathBuf;
 use std::sync::Arc;
 use winit::dpi::LogicalSize;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::{Window, WindowBuilder};
+
+#[derive(Debug, Clone, clap::Parser)]
+struct Args {
+    #[clap(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Clone, clap::Subcommand)]
+enum Command {
+    Play(PlayArgs),
+}
+
+#[derive(Debug, Clone, clap::Parser)]
+struct PlayArgs {
+    path: PathBuf,
+}
 
 pub type GraphicsContext = Arc<GraphicsContextInner>;
 
@@ -135,6 +155,70 @@ impl App {
 fn main() -> anyhow::Result<()> {
     env_logger::init();
 
+    // Open audio file
+    let args = Args::parse();
+    let mut source = match args.command {
+        Command::Play(play_args) => {
+            let file = audrey::open(play_args.path)?;
+
+            file
+        }
+    };
+    let descr = source.description();
+    ensure!(
+        descr.channel_count() == 2,
+        "audio channels must be equal to 2 (stereo)"
+    );
+
+    let target_channels = ChannelCount::try_from(descr.channel_count()).unwrap();
+    let target_rate = SampleRate(descr.sample_rate());
+
+    // Setup audio output
+    let host = cpal::default_host();
+    let output_device = host
+        .default_output_device()
+        .context("no default output device")?;
+    let output_config = output_device
+        .supported_output_configs()?
+        .filter(|cfg| cfg.channels() == target_channels)
+        .filter_map(|cfg| cfg.try_with_sample_rate(target_rate))
+        .max_by_key(|config| {
+            // Priorities:
+            // - Floating-point input
+            // - Maximum precision
+            // - Maximum buffer size
+            (
+                config.sample_format().is_float(),
+                config.sample_format().sample_size(),
+                match *config.buffer_size() {
+                    SupportedBufferSize::Range { max, .. } => max,
+                    _ => 0,
+                },
+            )
+        })
+        .context("no device configuration matches the given sample rate and channel count")?;
+
+    let output_stream = output_device.build_output_stream::<f32, _, _>(
+        &output_config.config(),
+        move |output_data, _output_info| {
+            output_data.fill_with(|| {
+                source
+                    .samples::<f32>()
+                    .next()
+                    .expect("end of audio")
+                    .expect("read error")
+            });
+            // TODO pass to graphics
+        },
+        |stream_error| {
+            eprintln!("stream error: {:?}", stream_error);
+        },
+        None,
+    )?;
+    output_stream.play()?;
+
+    // Setup graphics loop
+    // TODO account for sample rate in graphics
     let event_loop = EventLoop::new()?;
     let window = WindowBuilder::new()
         .with_inner_size(LogicalSize::new(720, 720))
