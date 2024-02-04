@@ -9,6 +9,8 @@ use scope::Scope;
 use std::iter::repeat;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+use thingbuf::recycling::WithCapacity;
 use thingbuf::ThingBuf;
 use winit::dpi::LogicalSize;
 use winit::event::{Event, WindowEvent};
@@ -32,6 +34,8 @@ struct PlayArgs {
 }
 
 pub type GraphicsContext = Arc<GraphicsContextInner>;
+
+type SampleBuf = Arc<ThingBuf<Vec<[f32; 2]>, WithCapacity>>;
 
 pub struct GraphicsContextInner {
     pub surface: wgpu::Surface<'static>,
@@ -93,12 +97,15 @@ impl GraphicsContextInner {
 
 struct App {
     gfx: GraphicsContext,
-    sample_buf: Arc<ThingBuf<[f32; 2]>>,
+    sample_buf: SampleBuf,
     scope: Scope,
+
+    fps_start: Instant,
+    fps_count: usize,
 }
 
 impl App {
-    async fn new(window: Window, sample_buf: Arc<ThingBuf<[f32; 2]>>) -> anyhow::Result<Self> {
+    async fn new(window: Window, sample_buf: SampleBuf) -> anyhow::Result<Self> {
         let gfx = Arc::new(GraphicsContextInner::new(Arc::new(window)).await?);
         let scope = Scope::new(Arc::clone(&gfx));
 
@@ -106,12 +113,19 @@ impl App {
             gfx,
             sample_buf,
             scope,
+            fps_start: Instant::now(),
+            fps_count: 0,
         })
     }
 
     fn update(&mut self) {
-        while let Some(frame) = self.sample_buf.pop() {
-            self.scope.push(frame);
+        loop {
+            let result = self.sample_buf.pop_with(|frames| {
+                self.scope.extend(frames.iter().copied());
+            });
+            if result.is_none() {
+                break;
+            }
         }
     }
 
@@ -139,6 +153,17 @@ impl App {
         self.gfx.queue.submit([encoder.finish()]);
         frame.present();
 
+        self.fps_count += 1;
+
+        let elapsed = self.fps_start.elapsed();
+        if elapsed > Duration::from_secs(1) {
+            let fps = self.fps_count as f32 / elapsed.as_secs_f32();
+            println!("FPS: {fps:8.1}");
+
+            self.fps_start = Instant::now();
+            self.fps_count = 0;
+        }
+
         Ok(())
     }
 
@@ -154,8 +179,8 @@ impl App {
             format: self.gfx.surface_format,
             width: size.width,
             height: size.height,
-            present_mode: self.gfx.surface_caps.present_modes[0],
-            desired_maximum_frame_latency: 2,
+            present_mode: wgpu::PresentMode::AutoVsync,
+            desired_maximum_frame_latency: 1,
             alpha_mode: self.gfx.surface_caps.alpha_modes[0],
             view_formats: vec![],
         };
@@ -214,7 +239,7 @@ fn main() -> anyhow::Result<()> {
         .context("no device configuration matches the given sample rate and channel count")?;
 
     let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build()?;
-    let sample_buf: Arc<ThingBuf<[f32; 2]>> = Arc::new(ThingBuf::new(4096));
+    let sample_buf: SampleBuf = Arc::new(ThingBuf::with_recycle(64, WithCapacity::new()));
 
     let audio_buf = Arc::clone(&sample_buf);
     let audio_events = event_loop.create_proxy();
@@ -227,17 +252,19 @@ fn main() -> anyhow::Result<()> {
                 .chain(repeat([0.0; 2]));
             let out_frames = output_data.chunks_mut(2);
 
-            let mut overrun = false;
-            for (i, (in_frame, out_frame)) in in_frames.zip(out_frames).enumerate() {
+            for (in_frame, out_frame) in in_frames.zip(out_frames) {
                 out_frame.copy_from_slice(&in_frame);
-
-                if i % 4 == 0 {
-                    if audio_buf.push(in_frame).is_err() {
-                        overrun = true;
-                    }
-                }
             }
-            if overrun {
+
+            let push_result = audio_buf.push_with(|frames| {
+                frames.clear();
+                frames.extend(
+                    output_data
+                        .chunks(2)
+                        .map(|v| <[f32; 2]>::try_from(v).unwrap()),
+                );
+            });
+            if push_result.is_err() {
                 let _ = audio_events.send_event(AppEvent::Overrun);
             }
         },

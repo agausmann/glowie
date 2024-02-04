@@ -7,7 +7,7 @@ const STORAGE_DIMENSION: wgpu::TextureDimension = wgpu::TextureDimension::D2;
 const STORAGE_VIEW_DIMENSION: wgpu::TextureViewDimension = wgpu::TextureViewDimension::D2;
 const STORAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 
-const MAX_SAMPLES: usize = 2048;
+const MAX_SAMPLES: usize = 8192;
 
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
@@ -27,9 +27,9 @@ impl Default for Config {
             window_size: [360.0, 360.0],
             sample_count: 0,
             line_radius: 5.0,
-            decay: 1.0 - 1e-5,
+            decay: 1.0 - 1e-3,
             sigma: 2e-3,
-            intensity: 5e-6,
+            intensity: 1e-5,
             _pad: [0; 4],
         }
     }
@@ -276,8 +276,8 @@ impl Scope {
         }
     }
 
-    pub fn push(&mut self, frame: [f32; 2]) {
-        self.samples.push(frame);
+    pub fn extend(&mut self, frames: impl IntoIterator<Item = [f32; 2]>) {
+        self.samples.extend(frames);
     }
 
     pub fn draw(
@@ -286,6 +286,9 @@ impl Scope {
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
     ) {
+        if self.samples.len() > 2 * MAX_SAMPLES {
+            println!("too many samples! {}", self.samples.len());
+        }
         let batch_size = self.samples.len().min(MAX_SAMPLES);
 
         self.config.sample_count = batch_size.try_into().unwrap();
@@ -298,6 +301,7 @@ impl Scope {
         );
 
         self.samples.copy_within(batch_size - 1.., 0);
+        self.samples.truncate(self.samples.len() - batch_size + 1);
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

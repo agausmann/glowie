@@ -92,7 +92,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // Clamp to end point
             disp = pos - end;
         }
-        let x = excitation(length(disp)) / length(v);
+        let x = excitation(length(disp)) / (3 * config.sigma + length(v));
         if x == x {
             // Only finite numbers please
             next += x;
@@ -100,5 +100,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     textureStore(tex_out, frag_coord, vec4(next));
-    return vec4<f32>(0.0, next, 0.0, 1.0);
+    return vec4<f32>(0.0, pow(next, 0.5), 0.0, 1.0);
 }
