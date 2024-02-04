@@ -1,5 +1,4 @@
 use bytemuck::{Pod, Zeroable};
-use rand::Rng;
 use wgpu::RenderPipelineDescriptor;
 
 use crate::GraphicsContext;
@@ -8,7 +7,7 @@ const STORAGE_DIMENSION: wgpu::TextureDimension = wgpu::TextureDimension::D2;
 const STORAGE_VIEW_DIMENSION: wgpu::TextureViewDimension = wgpu::TextureViewDimension::D2;
 const STORAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 
-const MAX_SAMPLES: usize = 4096;
+const MAX_SAMPLES: usize = 2048;
 
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
@@ -25,12 +24,12 @@ struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            window_size: [720.0, 720.0],
+            window_size: [360.0, 360.0],
             sample_count: 0,
             line_radius: 5.0,
-            decay: 1.0 - 1e-4,
+            decay: 1.0 - 1e-5,
             sigma: 2e-3,
-            intensity: 5e-7,
+            intensity: 5e-6,
             _pad: [0; 4],
         }
     }
@@ -42,6 +41,7 @@ struct Sample {
     xy: [f32; 2],
 }
 
+#[allow(dead_code)]
 struct SizeDependent {
     a: wgpu::Texture,
     b: wgpu::Texture,
@@ -128,7 +128,6 @@ pub struct Scope {
     texture_bind_group_layout: wgpu::BindGroupLayout,
     size_dependent: SizeDependent,
     pipeline: wgpu::RenderPipeline,
-    t: f32,
 }
 
 impl Scope {
@@ -141,7 +140,7 @@ impl Scope {
             mapped_at_creation: false,
         });
 
-        let samples = vec![[0.0; 2]; 1024];
+        let samples = vec![[0.0; 2]];
         let sample_buffer = gfx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Scope.sample_buffer"),
             size: (MAX_SAMPLES * std::mem::size_of::<Sample>())
@@ -274,8 +273,11 @@ impl Scope {
             texture_bind_group_layout,
             size_dependent,
             pipeline,
-            t: 0.0,
         }
+    }
+
+    pub fn push(&mut self, frame: [f32; 2]) {
+        self.samples.push(frame);
     }
 
     pub fn draw(
@@ -284,20 +286,18 @@ impl Scope {
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
     ) {
-        self.config.sample_count = self.samples.len().try_into().unwrap();
-        queue.write_buffer(&self.config_buffer, 0, bytemuck::bytes_of(&self.config));
+        let batch_size = self.samples.len().min(MAX_SAMPLES);
 
-        *self.samples.first_mut().unwrap() = *self.samples.last().unwrap();
-        self.samples[1..].fill_with(|| {
-            self.t += 0.005;
-            [0.5 * (3.0 * self.t).cos(), 0.5 * (3.01 * self.t).sin()]
-        });
+        self.config.sample_count = batch_size.try_into().unwrap();
+        queue.write_buffer(&self.config_buffer, 0, bytemuck::bytes_of(&self.config));
 
         queue.write_buffer(
             &self.sample_buffer,
             0,
-            bytemuck::cast_slice(self.samples.as_slice()),
+            bytemuck::cast_slice(&self.samples[..batch_size]),
         );
+
+        self.samples.copy_within(batch_size - 1.., 0);
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

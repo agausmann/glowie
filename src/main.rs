@@ -6,11 +6,13 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{ChannelCount, SampleRate, SupportedBufferSize};
 use pollster::block_on;
 use scope::Scope;
+use std::iter::repeat;
 use std::path::PathBuf;
 use std::sync::Arc;
+use thingbuf::ThingBuf;
 use winit::dpi::LogicalSize;
 use winit::event::{Event, WindowEvent};
-use winit::event_loop::{ControlFlow, EventLoop};
+use winit::event_loop::{ControlFlow, EventLoopBuilder};
 use winit::window::{Window, WindowBuilder};
 
 #[derive(Debug, Clone, clap::Parser)]
@@ -91,18 +93,27 @@ impl GraphicsContextInner {
 
 struct App {
     gfx: GraphicsContext,
+    sample_buf: Arc<ThingBuf<[f32; 2]>>,
     scope: Scope,
 }
 
 impl App {
-    async fn new(window: Window) -> anyhow::Result<Self> {
+    async fn new(window: Window, sample_buf: Arc<ThingBuf<[f32; 2]>>) -> anyhow::Result<Self> {
         let gfx = Arc::new(GraphicsContextInner::new(Arc::new(window)).await?);
         let scope = Scope::new(Arc::clone(&gfx));
 
-        Ok(Self { gfx, scope })
+        Ok(Self {
+            gfx,
+            sample_buf,
+            scope,
+        })
     }
 
-    fn update(&mut self) {}
+    fn update(&mut self) {
+        while let Some(frame) = self.sample_buf.pop() {
+            self.scope.push(frame);
+        }
+    }
 
     fn redraw(&mut self) -> anyhow::Result<()> {
         let frame = loop {
@@ -152,6 +163,10 @@ impl App {
     }
 }
 
+enum AppEvent {
+    Overrun,
+}
+
 fn main() -> anyhow::Result<()> {
     env_logger::init();
 
@@ -198,17 +213,33 @@ fn main() -> anyhow::Result<()> {
         })
         .context("no device configuration matches the given sample rate and channel count")?;
 
+    let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build()?;
+    let sample_buf: Arc<ThingBuf<[f32; 2]>> = Arc::new(ThingBuf::new(4096));
+
+    let audio_buf = Arc::clone(&sample_buf);
+    let audio_events = event_loop.create_proxy();
     let output_stream = output_device.build_output_stream::<f32, _, _>(
         &output_config.config(),
         move |output_data, _output_info| {
-            output_data.fill_with(|| {
-                source
-                    .samples::<f32>()
-                    .next()
-                    .expect("end of audio")
-                    .expect("read error")
-            });
-            // TODO pass to graphics
+            let in_frames = source
+                .frames::<[f32; 2]>()
+                .map(|result| result.expect("read error"))
+                .chain(repeat([0.0; 2]));
+            let out_frames = output_data.chunks_mut(2);
+
+            let mut overrun = false;
+            for (i, (in_frame, out_frame)) in in_frames.zip(out_frames).enumerate() {
+                out_frame.copy_from_slice(&in_frame);
+
+                if i % 4 == 0 {
+                    if audio_buf.push(in_frame).is_err() {
+                        overrun = true;
+                    }
+                }
+            }
+            if overrun {
+                let _ = audio_events.send_event(AppEvent::Overrun);
+            }
         },
         |stream_error| {
             eprintln!("stream error: {:?}", stream_error);
@@ -219,14 +250,13 @@ fn main() -> anyhow::Result<()> {
 
     // Setup graphics loop
     // TODO account for sample rate in graphics
-    let event_loop = EventLoop::new()?;
     let window = WindowBuilder::new()
-        .with_inner_size(LogicalSize::new(720, 720))
+        .with_inner_size(LogicalSize::new(360, 360))
         .with_title("Glowie")
         .with_decorations(false)
         .build(&event_loop)?;
 
-    let mut app = block_on(App::new(window))?;
+    let mut app = block_on(App::new(window, sample_buf))?;
     app.reconfigure();
 
     event_loop.set_control_flow(ControlFlow::Poll);
@@ -244,6 +274,11 @@ fn main() -> anyhow::Result<()> {
                 app.window_resized();
             }
             _ => {}
+        },
+        Event::UserEvent(app_event) => match app_event {
+            AppEvent::Overrun => {
+                eprintln!("OVERRUN from audio thread");
+            }
         },
         _ => {}
     })?;
