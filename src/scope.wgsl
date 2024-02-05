@@ -129,8 +129,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     next *= pow(config.decay, config.total_time - t);
 
     // Clipping
-    next = clamp(next, 0.0, 2.0);
+    next = clamp(next, 0.0, 10.0);
 
     textureStore(tex_out, frag_coord, vec4(next));
-    return vec4<f32>(0.0, pow(next, 0.5), 0.0, 1.0);
+    return vec4<f32>((next - 1.0) / 2.5, next, (next - 1.0) / 2.0, 1.0);
 }

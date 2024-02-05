@@ -28,9 +28,9 @@ impl Default for Config {
         Self {
             window_size: [360.0, 360.0],
             line_radius: 5.0,
-            decay: 1.0 - 1e-3,
-            sigma: 2e-3,
-            intensity: 1e-5,
+            decay: 1.0 - 5e-4,
+            sigma: 5e-3,
+            intensity: 2e-5,
             total_time: 0.0,
             chunks: std::array::from_fn(|_| Chunk4::default()),
             _pad: [0; 4],
