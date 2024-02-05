@@ -174,6 +174,8 @@ pub struct Scope {
     texture_bind_group_layout: wgpu::BindGroupLayout,
     size_dependent: SizeDependent,
     pipeline: wgpu::RenderPipeline,
+    sample_count: usize,
+    frame_count: usize,
 }
 
 impl Scope {
@@ -324,6 +326,8 @@ impl Scope {
             texture_bind_group_layout,
             size_dependent,
             pipeline,
+            sample_count: 0,
+            frame_count: 0,
         }
     }
 
@@ -332,10 +336,16 @@ impl Scope {
     }
 
     fn generate_chunks(&mut self) {
+        let mut sample_limit = self.samples.len();
+        if self.frame_count > 30 {
+            // Try to render close to real-time, if possible.
+            let samples_per_frame_approx = self.sample_count as f32 / self.frame_count as f32;
+            sample_limit = (1.1 * samples_per_frame_approx) as usize;
+        }
         // generate lines from samples, and assign lines to chunks.
         let mut batch_size = 0;
         let mut line_buffer_size = 0;
-        for seg in self.samples.windows(2) {
+        for seg in self.samples.windows(2).take(sample_limit) {
             // TODO: more efficient chunk iteration
 
             let start = Vec2::from(seg[0]);
@@ -398,6 +408,7 @@ impl Scope {
 
         // finalize
         self.config.total_time = batch_size as f32;
+        self.sample_count += batch_size;
     }
 
     pub fn draw(
@@ -431,6 +442,7 @@ impl Scope {
             &mut self.size_dependent.front,
             &mut self.size_dependent.back,
         );
+        self.frame_count += 1;
     }
 
     pub fn window_resized(&mut self) {
