@@ -403,8 +403,10 @@ impl Scope {
             .extend(self.chunk_lines.iter_mut().flat_map(|v| v.drain(..)));
 
         // remove processed samples from buffer
-        self.samples.copy_within(batch_size - 1.., 0);
-        self.samples.truncate(self.samples.len() - batch_size + 1);
+        if batch_size > 0 {
+            self.samples.copy_within(batch_size - 1.., 0);
+            self.samples.truncate(self.samples.len() - batch_size + 1);
+        }
 
         // finalize
         self.config.total_time = batch_size as f32;
